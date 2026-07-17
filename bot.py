@@ -4687,6 +4687,38 @@ async def proxy_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await proxy_settings(update, context)
     return -1
    
+def _start_health_server():
+    """يشغل خادم HTTP بسيط على المنفذ المطلوب لفحص صحة Render."""
+    import http.server
+    import socketserver
+
+    port = int(os.environ.get("PORT", 10000))
+
+    class HealthHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/health" or self.path == "/":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"OK")
+            else:
+                self.send_response(404)
+                self.end_headers()
+        def log_message(self, *args):
+            pass
+
+    def _run():
+        with socketserver.TCPServer(("", port), HealthHandler) as httpd:
+            httpd.serve_forever()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    logger.info(f"Health check server started on port {port}")
+
+
+# تشغيل خادم فحص الصحة عند بدء البوت (Render health check)
+_start_health_server()
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -4912,6 +4944,7 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_panel$"))
     app.add_handler(CommandHandler("start", start))
 
+    # تشغيل خادم HTTP بسيط لفحص الصحة (Render health check)
     print("=" * 60)
     print("✅ AK Bot شغال - النسخة النهائية الكاملة")
     print(f"👑 المديرين: {ADMIN_IDS}")
