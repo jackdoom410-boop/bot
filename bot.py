@@ -5,7 +5,7 @@ import requests
 import json
 import time
 import asyncio
-import sqlite3
+import os
 import re
 import threading
 import urllib.request
@@ -21,6 +21,9 @@ from telegram.ext import (
     filters, ContextTypes, ConversationHandler
 )
 
+# PostgreSQL database layer (replaces SQLite)
+from db import conn_main, c_main, get_db, return_db, init_db
+
 # ==================== إعدادات السجل ====================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -29,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== ثوابت البوت ====================
-BOT_TOKEN = "8860414927:AAGxO3Pdyq-ZaIL6ZFJOerYnWhtef3JxGXA"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8860414927:AAGxO3Pdyq-ZaIL6ZFJOerYnWhtef3JxGXA")
 ADMIN_IDS = [6075014046, 5697155314, 8114043468]
 SUPPORT_USER = "@abodnft"
 
@@ -38,42 +41,6 @@ MAX_WORKERS = 50
 CACHE_TTL = 300
 DB_TIMEOUT = 30
 DB_POOL_SIZE = 20
-
-# ==================== تجمع قواعد البيانات ====================
-class DatabasePool:
-    _instance = None
-    _lock = threading.Lock()
-    
-    def __new__(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance.pool = []
-                    cls._instance.pool_lock = threading.Lock()
-                    for _ in range(DB_POOL_SIZE):
-                        conn = sqlite3.connect('bot.db', check_same_thread=False, timeout=DB_TIMEOUT)
-                        conn.row_factory = sqlite3.Row
-                        cls._instance.pool.append(conn)
-        return cls._instance
-    
-    def get_connection(self):
-        with self.pool_lock:
-            if self.pool:
-                return self.pool.pop()
-            return sqlite3.connect('bot.db', check_same_thread=False, timeout=DB_TIMEOUT)
-    
-    def return_connection(self, conn):
-        with self.pool_lock:
-            self.pool.append(conn)
-
-db_pool = DatabasePool()
-
-def get_db():
-    return db_pool.get_connection()
-
-def return_db(conn):
-    db_pool.return_connection(conn)
 
 # ==================== الكاش ====================
 cache: Dict[str, Tuple[Any, float]] = {}
@@ -102,149 +69,10 @@ def cache_clear(pattern: str = None) -> None:
                 del cache[k]
 
 # ==================== قاعدة البيانات ====================
-conn_main = sqlite3.connect('bot.db', check_same_thread=False, timeout=DB_TIMEOUT)
-conn_main.row_factory = sqlite3.Row
-c_main = conn_main.cursor()
-
-# إنشاء الجداول
-c_main.execute('''CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    name TEXT,
-    last_use TEXT,
-    banned INTEGER DEFAULT 0,
-    admin INTEGER DEFAULT 0,
-    allowed INTEGER DEFAULT 0,
-    created_at TEXT,
-    total_requests INTEGER DEFAULT 0
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS allowed_users (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    name TEXT,
-    added_by INTEGER,
-    added_date TEXT
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS user_platform (
-    user_id INTEGER PRIMARY KEY,
-    platform TEXT DEFAULT 'android'
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS games_af (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE,
-    display_name TEXT,
-    package TEXT,
-    dev_key TEXT,
-    emoji TEXT
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS games_singular (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE,
-    display_name TEXT,
-    package TEXT,
-    app_key TEXT,
-    emoji TEXT
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS games_adj (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE,
-    display_name TEXT,
-    app_token TEXT,
-    emoji TEXT
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS events_af (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    game_id INTEGER,
-    event_name TEXT,
-    display_name TEXT,
-    event_type TEXT,
-    is_purchase INTEGER DEFAULT 0
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS events_singular (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    game_id INTEGER,
-    event_name TEXT,
-    display_name TEXT,
-    event_type TEXT
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS events_adj (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    game_id INTEGER,
-    event_name TEXT,
-    event_token TEXT,
-    display_name TEXT,
-    level_value INTEGER
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS proxies (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER UNIQUE,
-    proxy_type TEXT,
-    proxy_host TEXT,
-    proxy_port INTEGER,
-    proxy_user TEXT,
-    proxy_pass TEXT,
-    created_date TEXT,
-    last_used TEXT,
-    usage_count INTEGER DEFAULT 0
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS farm_tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    task_name TEXT UNIQUE,
-    platform TEXT,
-    game_id INTEGER,
-    game_name TEXT,
-    start_level INTEGER,
-    end_level INTEGER,
-    total_days INTEGER,
-    mode TEXT,
-    current_day INTEGER,
-    current_level INTEGER,
-    status TEXT,
-    created_date TEXT,
-    last_run TEXT,
-    aifa TEXT,
-    gaid TEXT,
-    uid TEXT,
-    af_uid TEXT,
-    gps_adid TEXT,
-    idfa TEXT,
-    idfv TEXT,
-    att_status INTEGER,
-    completed_levels INTEGER DEFAULT 0,
-    failed_attempts INTEGER DEFAULT 0
-)''')
-
-c_main.execute('''CREATE TABLE IF NOT EXISTS user_stats (
-    user_id INTEGER PRIMARY KEY,
-    last_daily_reset TEXT,
-    daily_requests INTEGER DEFAULT 0,
-    total_af_requests INTEGER DEFAULT 0,
-    total_adj_requests INTEGER DEFAULT 0,
-    total_singular_requests INTEGER DEFAULT 0
-)''')
-
-# إنشاء الفهارس
-c_main.execute("CREATE INDEX IF NOT EXISTS idx_users_allowed ON users(allowed)")
-c_main.execute("CREATE INDEX IF NOT EXISTS idx_users_banned ON users(banned)")
-c_main.execute("CREATE INDEX IF NOT EXISTS idx_farm_tasks_user ON farm_tasks(user_id)")
-c_main.execute("CREATE INDEX IF NOT EXISTS idx_farm_tasks_status ON farm_tasks(status)")
-c_main.execute("CREATE INDEX IF NOT EXISTS idx_events_af_game ON events_af(game_id)")
-c_main.execute("CREATE INDEX IF NOT EXISTS idx_events_adj_game ON events_adj(game_id)")
-c_main.execute("CREATE INDEX IF NOT EXISTS idx_events_singular_game ON events_singular(game_id)")
-c_main.execute("CREATE INDEX IF NOT EXISTS idx_proxies_user ON proxies(user_id)")
-c_main.execute("CREATE INDEX IF NOT EXISTS idx_user_platform ON user_platform(user_id)")
-conn_main.commit()
+# Tables are created via Supabase migration. Verify connection.
+if not init_db():
+    raise RuntimeError("Failed to connect to PostgreSQL database. Check DATABASE_URL.")
+logger.info("PostgreSQL database connection established.")
 
 # ==================== دوال نظام التشغيل ====================
 def get_user_platform(user_id: int) -> str:
@@ -260,15 +88,11 @@ def set_user_platform(user_id: int, platform: str) -> None:
     conn_main.commit()
 
 # ==================== إضافة البيانات الأولية ====================
-
-# حذف البيانات القديمة لتجنب التكرار
-c_main.execute("DELETE FROM games_af")
-c_main.execute("DELETE FROM events_af")
-c_main.execute("DELETE FROM games_singular")
-c_main.execute("DELETE FROM events_singular")
-c_main.execute("DELETE FROM games_adj")
-c_main.execute("DELETE FROM events_adj")
-conn_main.commit()
+# ملاحظة: البيانات الأولية (الألعاب والأحداث) تُخزن في قاعدة البيانات
+# وتُضاف فقط إذا لم تكن موجودة (ON CONFLICT DO NOTHING) - لا يتم حذف أي بيانات
+# للتسريع: نتخطى إضافة البيانات الأولية إذا كانت موجودة مسبقاً
+_seed_check = c_main.execute("SELECT COUNT(*) FROM games_af").fetchone()
+_SEED_DATA_EXISTS = _seed_check[0] > 0 if _seed_check else False
 
 # ==================== ألعاب AppsFlyer ====================
 AF_GAMES = [
@@ -291,8 +115,9 @@ AF_GAMES = [
     ("zombie_waves", "🧟 Zombie Waves", "com.ddup.zombiewaves.zw", "wiQMRPvGaAYTGBCgM5yN9N", "🧟"),
 ]
 
-for game in AF_GAMES:
-    c_main.execute("INSERT OR IGNORE INTO games_af (name, display_name, package, dev_key, emoji) VALUES (?, ?, ?, ?, ?)", game)
+if not _SEED_DATA_EXISTS:
+    for game in AF_GAMES:
+        c_main.execute("INSERT OR IGNORE INTO games_af (name, display_name, package, dev_key, emoji) VALUES (?, ?, ?, ?, ?)", game)
 
 def add_af_events():
     # Dice Dreams
@@ -398,7 +223,8 @@ def add_af_events():
         c_main.execute("INSERT OR IGNORE INTO events_af (game_id, event_name, display_name, event_type, is_purchase) VALUES (?, ?, ?, ?, ?)", 
                        (zw[0], "af_zw_lv5", "🧟 Level 5", "level", 0))
 
-add_af_events()
+if not _SEED_DATA_EXISTS:
+    add_af_events()
 
 # ==================== ألعاب Singular ====================
 SINGULAR_GAMES = [
@@ -425,8 +251,9 @@ SINGULAR_GAMES = [
     ("eatventure", "🍔 Eatventure", "com.hwqgrhhjfd.idlefastfood", "lessmore_edff53fc", "🍔"),
 ]
 
-for game in SINGULAR_GAMES:
-    c_main.execute("INSERT OR IGNORE INTO games_singular (name, display_name, package, app_key, emoji) VALUES (?, ?, ?, ?, ?)", game)
+if not _SEED_DATA_EXISTS:
+    for game in SINGULAR_GAMES:
+        c_main.execute("INSERT OR IGNORE INTO games_singular (name, display_name, package, app_key, emoji) VALUES (?, ?, ?, ?, ?)", game)
 
 def add_singular_events():
     # Animals & Coins
@@ -553,7 +380,8 @@ def add_singular_events():
         c_main.execute("INSERT OR IGNORE INTO events_singular (game_id, event_name, display_name, event_type) VALUES (?, ?, ?, ?)", 
                        (ev[0], "lm_restaurant_completion", "🍔 lm_restaurant_completion", "complete"))
 
-add_singular_events()
+if not _SEED_DATA_EXISTS:
+    add_singular_events()
 
 # ==================== ألعاب Adjust ====================
 ADJ_GAMES = [
@@ -580,8 +408,9 @@ ADJ_GAMES = [
     ("color_water_sort", "🎨 Color Water Sort", "367kicwptj5s", "🎨"),
 ]
 
-for game in ADJ_GAMES:
-    c_main.execute("INSERT OR IGNORE INTO games_adj (name, display_name, app_token, emoji) VALUES (?, ?, ?, ?)", game)
+if not _SEED_DATA_EXISTS:
+    for game in ADJ_GAMES:
+        c_main.execute("INSERT OR IGNORE INTO games_adj (name, display_name, app_token, emoji) VALUES (?, ?, ?, ?)", game)
 
 def add_adj_events():
     # Get Color
@@ -933,7 +762,8 @@ def add_adj_events():
             c_main.execute("INSERT OR IGNORE INTO events_adj (game_id, event_name, event_token, display_name, level_value) VALUES (?, ?, ?, ?, ?)",
                            (gid, ev[0], ev[1], ev[2], ev[3]))
 
-add_adj_events()
+if not _SEED_DATA_EXISTS:
+    add_adj_events()
 
 # إضافة المديرين
 c_main.execute("INSERT OR IGNORE INTO users (user_id, username, name, admin, allowed, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -5081,16 +4911,6 @@ def main():
     app.add_handler(CallbackQueryHandler(singular_custom, pattern="^singular_custom$"))
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_panel$"))
     app.add_handler(CommandHandler("start", start))
-
-    print("=" * 60)
-    print("✅ AK Bot شغال - النسخة النهائية الكاملة")
-    print(f"👑 المديرين: {ADMIN_IDS}")
-    print(f"📞 الدعم: {SUPPORT_USER}")
-    print("=" * 60)
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
 
     print("=" * 60)
     print("✅ AK Bot شغال - النسخة النهائية الكاملة")
