@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # ==================== ثوابت البوت ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8817641246:AAGP6V-z4iukkkQLU_6fOh0PiJTYNHeGyQU")
-ADMIN_IDS = [2031272262]
+ADMIN_IDS = [2031272262,1145409718]
 SUPPORT_USER = "@abodnft"
 
 # إعدادات الأداء
